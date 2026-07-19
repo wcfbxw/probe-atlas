@@ -1,0 +1,54 @@
+{
+  "name": "probe-atlas",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "cross-env WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev --hostname 0.0.0.0",
+    "dev:server": "node server/index.mjs",
+    "dev:sim": "node simulator/multi-agent.mjs",
+    "dev:all": "concurrently -k -n dashboard,server,agents -c cyan,green,yellow \"npm:dev\" \"npm:dev:server\" \"npm:dev:sim\"",
+    "build": "cross-env WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
+    "start": "cross-env WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
+    "test": "npm run build && npm run test:server && node --test tests/rendered-html.test.mjs",
+    "test:server": "node --test tests/server.test.mjs",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.3.0",
+    "@fastify/websocket": "^11.3.0",
+    "concurrently": "^9.2.4",
+    "cross-env": "^10.1.0",
+    "drizzle-orm": "0.45.2",
+    "echarts": "^6.1.0",
+    "fastify": "^5.10.0",
+    "lucide-react": "^0.468.0",
+    "next": "16.2.6",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "redis": "^5.12.1",
+    "ws": "^8.21.1"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.37.1",
+    "@tailwindcss/postcss": "4.2.1",
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "@vitejs/plugin-rsc": "0.5.26",
+    "drizzle-kit": "0.31.10",
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.2.6",
+    "react-server-dom-webpack": "19.2.6",
+    "tailwindcss": "4.2.1",
+    "typescript": "5.9.3",
+    "vinext": "0.0.50",
+    "vite": "8.0.13",
+    "wrangler": "4.92.0"
+  },
+  "type": "module"
+}
