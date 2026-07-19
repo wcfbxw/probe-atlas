@@ -1,0 +1,19 @@
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	# Agent WebSocket uses its own per-node token and must not be hidden behind
+	# the browser's HTTP Basic authentication.
+	handle /ws/agent {
+		reverse_proxy control:8080
+	}
+
+	handle {
+		basic_auth {
+			{$PANEL_USERNAME} {$PANEL_PASSWORD_HASH}
+		}
+
+		@control path /api/* /ws/dashboard /healthz
+		reverse_proxy @control control:8080
+		reverse_proxy dashboard:3000
+	}
+}

@@ -1,0 +1,86 @@
+name: probe-atlas
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --save
+      - "60"
+      - "1"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - probe-internal
+
+  control:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.control
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 8080
+      DATA_DIR: /data
+      REDIS_URL: redis://redis:6379
+      AGENT_TOKENS_JSON: ${AGENT_TOKENS_JSON:?AGENT_TOKENS_JSON is required}
+      CORS_ORIGINS: ${PUBLIC_URL:?PUBLIC_URL is required}
+      WEBHOOK_URL: ${WEBHOOK_URL:-}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+    volumes:
+      - probe-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - probe-internal
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.dashboard
+      args:
+        NEXT_PUBLIC_PROBE_API_URL: ${PUBLIC_URL:?PUBLIC_URL is required}
+    restart: unless-stopped
+    networks:
+      - probe-internal
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?SITE_ADDRESS is required}
+      PANEL_USERNAME: ${PANEL_USERNAME:?PANEL_USERNAME is required}
+      PANEL_PASSWORD_HASH: ${PANEL_PASSWORD_HASH:?PANEL_PASSWORD_HASH is required}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - control
+      - dashboard
+    networks:
+      - probe-internal
+
+networks:
+  probe-internal:
+    driver: bridge
+
+volumes:
+  redis-data:
+  probe-data:
+  caddy-data:
+  caddy-config:

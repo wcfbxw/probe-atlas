@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SITE_ADDRESS: http://127.0.0.1
+      PUBLIC_URL: http://127.0.0.1
+      PANEL_USERNAME: admin
+      PANEL_PASSWORD_HASH: $2a$14$CIOnlyHashValueNotUsedAtRuntime00000000000000000000000
+      AGENT_TOKENS_JSON: '{"ci-node":"ci-token-at-least-32-characters-long"}'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate shell scripts
+        run: bash -n deploy/install-server.sh deploy/install-agent.sh deploy/add-agent.sh
+
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+
+      - name: Run tests
+        run: npm test
