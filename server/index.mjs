@@ -5,7 +5,11 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import { AlertEngine } from "./alerts.mjs";
 import { loadConfig } from "./config.mjs";
-import { createStatusStore, SqliteRepository } from "./storage.mjs";
+import {
+  createStatusStore,
+  SqliteRepository,
+  trafficPeriodStart,
+} from "./storage.mjs";
 import {
   validateAuthMessage,
   validateMetricsMessage,
@@ -115,6 +119,7 @@ export async function buildServer(overrides = {}) {
     const statuses = await statusStore.getStatuses(
       servers.map((server) => server.server_id),
     );
+    const periodStart = trafficPeriodStart(Date.now(), config.trafficResetDay);
     return servers.map((server, index) => {
       const status = statuses[index];
       return {
@@ -134,6 +139,7 @@ export async function buildServer(overrides = {}) {
         connected: activeAgents.has(server.server_id),
         online: Boolean(status),
         status,
+        traffic: repository.getTraffic(server.server_id, periodStart),
       };
     });
   }
@@ -316,6 +322,12 @@ export async function buildServer(overrides = {}) {
       }
 
       const receivedAt = Date.now();
+      const traffic = repository.recordTraffic(
+        session.serverId,
+        result.value.data,
+        trafficPeriodStart(receivedAt, config.trafficResetDay),
+        receivedAt,
+      );
       const status = {
         server_id: session.serverId,
         session_id: session.id,
@@ -323,6 +335,7 @@ export async function buildServer(overrides = {}) {
         agent_timestamp: result.value.timestamp * 1000,
         received_at: receivedAt,
         data: result.value.data,
+        traffic,
       };
 
       await statusStore.setStatus(
@@ -418,6 +431,25 @@ export async function buildServer(overrides = {}) {
     }
   }, config.offlineSweepMs);
   timers.add(offlineTimer);
+
+  function pruneHistory() {
+    const now = Date.now();
+    try {
+      const removed = repository.prune({
+        metricsBefore: now - config.metricsRetentionDays * 86_400_000,
+        alertsBefore: now - config.alertRetentionDays * 86_400_000,
+      });
+      if (removed.metrics > 0 || removed.alerts > 0) {
+        app.log.info(removed, "Pruned expired history");
+      }
+    } catch (error) {
+      app.log.error(error, "History pruning failed");
+    }
+  }
+
+  pruneHistory();
+  const pruneTimer = setInterval(pruneHistory, config.pruneIntervalMs);
+  timers.add(pruneTimer);
 
   const existingServers = repository.getServers();
   const existingStatuses = await statusStore.getStatuses(

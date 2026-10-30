@@ -49,3 +49,4 @@ next-env.d.ts
 /.server.*.log
 /.simulator.*.log
 /.agent.*.log
+*.tsbuildinfo

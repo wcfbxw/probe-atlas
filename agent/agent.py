@@ -10,6 +10,7 @@ import platform
 import random
 import socket
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import psutil
@@ -17,6 +18,61 @@ import websockets
 
 
 MIB = 1024 * 1024
+
+# Loopback, container, bridge, VM and tunnel/VPN interfaces either never leave
+# the host or repeat traffic already counted on the physical NIC.
+VIRTUAL_INTERFACE_PREFIXES = (
+    "lo",
+    "docker",
+    "veth",
+    "br-",
+    "virbr",
+    "vnet",
+    "wg",
+    "zt",
+    "cni",
+    "flannel",
+    "cali",
+    "kube",
+    "vxlan",
+    "ifb",
+)
+VIRTUAL_INTERFACE_KEYWORDS = (
+    "tun",
+    "tap",
+    "wireguard",
+    "tailscale",
+    "zerotier",
+    "loopback",
+    "vmware",
+    "virtualbox",
+    "vethernet",
+    "hyper-v",
+)
+
+
+def is_counted_interface(name: str, stats) -> bool:
+    lower = name.lower()
+    if lower.startswith(VIRTUAL_INTERFACE_PREFIXES):
+        return False
+    if any(keyword in lower for keyword in VIRTUAL_INTERFACE_KEYWORDS):
+        return False
+    return "loopback" not in getattr(stats, "flags", "")
+
+
+def net_counters(interfaces: frozenset[str] = frozenset()) -> tuple[int, int]:
+    stats = psutil.net_if_stats()
+    rx = tx = 0
+    for name, counters in psutil.net_io_counters(pernic=True).items():
+        counted = (
+            name in interfaces
+            if interfaces
+            else is_counted_interface(name, stats.get(name))
+        )
+        if counted:
+            rx += counters.bytes_recv
+            tx += counters.bytes_sent
+    return rx, tx
 
 
 @dataclass
@@ -28,6 +84,7 @@ class AgentConfig:
     region: str
     provider: str
     interval_seconds: float = 2.0
+    interfaces: frozenset[str] = frozenset()
 
     @classmethod
     def from_environment(cls) -> "AgentConfig":
@@ -50,16 +107,23 @@ class AgentConfig:
             interval_seconds=max(
                 1.0, float(os.environ.get("PROBE_INTERVAL_SECONDS", "2"))
             ),
+            # Comma-separated NICs to count instead of auto-detection.
+            interfaces=frozenset(
+                name.strip()
+                for name in os.environ.get("PROBE_INTERFACES", "").split(",")
+                if name.strip()
+            ),
         )
 
 
 class MetricsCollector:
-    def __init__(self) -> None:
-        net = psutil.net_io_counters()
+    def __init__(self, interfaces: frozenset[str] = frozenset()) -> None:
+        self.interfaces = interfaces
+        rx, tx = net_counters(interfaces)
         disk_io = psutil.disk_io_counters()
         self.previous_time = time.monotonic()
-        self.previous_rx = net.bytes_recv
-        self.previous_tx = net.bytes_sent
+        self.previous_rx = rx
+        self.previous_tx = tx
         self.previous_disk_read = disk_io.read_bytes if disk_io else 0
         self.previous_disk_write = disk_io.write_bytes if disk_io else 0
         self.last_tcp_scan = 0.0
@@ -100,7 +164,7 @@ class MetricsCollector:
         memory = psutil.virtual_memory()
         swap = psutil.swap_memory()
         disk = psutil.disk_usage("/")
-        net = psutil.net_io_counters()
+        net_rx, net_tx = net_counters(self.interfaces)
         disk_io = psutil.disk_io_counters()
         loads = psutil.getloadavg() if hasattr(psutil, "getloadavg") else (0, 0, 0)
 
@@ -140,14 +204,10 @@ class MetricsCollector:
                     ),
                 },
                 "network": {
-                    "rx_bytes_sec": self._rate(
-                        net.bytes_recv, self.previous_rx, elapsed
-                    ),
-                    "tx_bytes_sec": self._rate(
-                        net.bytes_sent, self.previous_tx, elapsed
-                    ),
-                    "total_rx_bytes": net.bytes_recv,
-                    "total_tx_bytes": net.bytes_sent,
+                    "rx_bytes_sec": self._rate(net_rx, self.previous_rx, elapsed),
+                    "tx_bytes_sec": self._rate(net_tx, self.previous_tx, elapsed),
+                    "total_rx_bytes": net_rx,
+                    "total_tx_bytes": net_tx,
                     "tcp_connections": self._scan_tcp(monotonic_time),
                 },
                 "uptime_seconds": max(0, int(wall_time - psutil.boot_time())),
@@ -155,11 +215,24 @@ class MetricsCollector:
         }
 
         self.previous_time = monotonic_time
-        self.previous_rx = net.bytes_recv
-        self.previous_tx = net.bytes_sent
+        self.previous_rx = net_rx
+        self.previous_tx = net_tx
         self.previous_disk_read = disk_read
         self.previous_disk_write = disk_write
         return payload
+
+
+def cpu_model() -> str:
+    # platform.processor() only returns "x86_64"/"unknown" on most Linux distros.
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as cpuinfo:
+            for line in cpuinfo:
+                key, _, value = line.partition(":")
+                if key.strip() in ("model name", "Model", "Hardware") and value.strip():
+                    return value.strip()
+    except OSError:
+        pass
+    return platform.processor() or platform.machine() or "Unknown CPU"
 
 
 def auth_packet(config: AgentConfig) -> dict:
@@ -176,7 +249,7 @@ def auth_packet(config: AgentConfig) -> dict:
         "tags": [],
         "os": f"{platform.system()} {platform.release()}",
         "arch": platform.machine(),
-        "cpu_model": platform.processor() or "Unknown CPU",
+        "cpu_model": cpu_model(),
         "cpu_cores": psutil.cpu_count(logical=True) or 1,
         "mem_total_mb": memory.total // MIB,
         "disk_total_mb": disk.total // MIB,
@@ -187,7 +260,7 @@ async def send_metrics(
     websocket: websockets.ClientConnection,
     config: AgentConfig,
 ) -> None:
-    collector = MetricsCollector()
+    collector = MetricsCollector(config.interfaces)
     sequence = 0
     while True:
         await asyncio.sleep(config.interval_seconds)
@@ -202,7 +275,10 @@ async def receive_messages(websocket: websockets.ClientConnection) -> None:
             raise RuntimeError(f"Server rejected packet: {message.get('code')}")
 
 
-async def run_session(config: AgentConfig) -> None:
+async def run_session(
+    config: AgentConfig,
+    on_authenticated: Callable[[], None],
+) -> None:
     async with websockets.connect(
         config.server_url,
         open_timeout=10,
@@ -218,6 +294,7 @@ async def run_session(config: AgentConfig) -> None:
             raise RuntimeError(f"Authentication failed: {response}")
 
         print(f"Authenticated as {config.server_id}", flush=True)
+        on_authenticated()
         sender = asyncio.create_task(send_metrics(websocket, config))
         receiver = asyncio.create_task(receive_messages(websocket))
         done, pending = await asyncio.wait(
@@ -231,11 +308,16 @@ async def run_session(config: AgentConfig) -> None:
 
 async def run_forever(config: AgentConfig) -> None:
     backoff = 1.0
+
+    # run_session always ends by raising, so reset once a session authenticates.
+    def reset_backoff() -> None:
+        nonlocal backoff
+        backoff = 1.0
+
     while True:
         try:
             print(f"Connecting to {config.server_url}", flush=True)
-            await run_session(config)
-            backoff = 1.0
+            await run_session(config, reset_backoff)
         except asyncio.CancelledError:
             raise
         except Exception as error:  # noqa: BLE001 - reconnect boundary

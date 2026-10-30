@@ -619,6 +619,51 @@ button {
   font-size: 8px;
 }
 
+.card-traffic {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(65, 97, 115, 0.16);
+}
+
+.card-traffic > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.card-traffic span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.card-traffic strong {
+  color: #c5d6dd;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+}
+
+.card-traffic small {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: wrap;
+  color: var(--muted-2);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+}
+
+.card-traffic small svg:first-child {
+  color: var(--green);
+}
+
+.card-traffic small svg:last-of-type {
+  margin-left: 4px;
+  color: var(--blue);
+}
+
 .card-network {
   display: flex;
   align-items: center;

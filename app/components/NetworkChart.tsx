@@ -2,16 +2,13 @@
 
 import type { EChartsType } from "echarts";
 import { useEffect, useRef } from "react";
+import { formatRate } from "../format";
 
 export type NetworkPoint = {
   time: number;
   rx: number;
   tx: number;
 };
-
-function megabits(bytes: number) {
-  return Number(((bytes * 8) / 1_000_000).toFixed(2));
-}
 
 export function NetworkChart({ points }: { points: NetworkPoint[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -48,13 +45,13 @@ export function NetworkChart({ points }: { points: NetworkPoint[] }) {
 
     chart.setOption({
       animationDuration: 360,
-      grid: { top: 18, right: 12, bottom: 26, left: 48 },
+      grid: { top: 18, right: 12, bottom: 26, left: 64 },
       tooltip: {
         trigger: "axis",
         backgroundColor: "rgba(7, 18, 30, .96)",
         borderColor: "#1d3b51",
         textStyle: { color: "#d8e7ef", fontSize: 12 },
-        valueFormatter: (value: number) => `${value.toFixed(2)} Mbps`,
+        valueFormatter: (value: number) => formatRate(value),
       },
       xAxis: {
         type: "category",
@@ -80,7 +77,7 @@ export function NetworkChart({ points }: { points: NetworkPoint[] }) {
         axisLabel: {
           color: "#668092",
           fontSize: 10,
-          formatter: "{value}M",
+          formatter: (value: number) => formatRate(value),
         },
         splitLine: { lineStyle: { color: "rgba(61, 92, 111, .2)" } },
       },
@@ -88,7 +85,7 @@ export function NetworkChart({ points }: { points: NetworkPoint[] }) {
         {
           name: "下载",
           type: "line",
-          data: points.map((point) => megabits(point.rx)),
+          data: points.map((point) => point.rx),
           showSymbol: false,
           smooth: 0.25,
           lineStyle: { color: "#36d9b0", width: 2 },
@@ -97,7 +94,7 @@ export function NetworkChart({ points }: { points: NetworkPoint[] }) {
         {
           name: "上传",
           type: "line",
-          data: points.map((point) => megabits(point.tx)),
+          data: points.map((point) => point.tx),
           showSymbol: false,
           smooth: 0.25,
           lineStyle: { color: "#55a8ff", width: 2 },

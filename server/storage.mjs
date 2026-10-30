@@ -93,6 +93,32 @@ export function createStatusStore(config, logger) {
     : new MemoryStatusStore();
 }
 
+function trafficView(row, periodStart) {
+  const samePeriod = row?.period_start === periodStart;
+  return {
+    period_start: periodStart,
+    month_rx_bytes: samePeriod ? row.period_rx : 0,
+    month_tx_bytes: samePeriod ? row.period_tx : 0,
+    total_rx_bytes: row?.total_rx ?? 0,
+    total_tx_bytes: row?.total_tx ?? 0,
+  };
+}
+
+// Start (YYYY-MM-DD, server local time) of the billing month containing `now`.
+export function trafficPeriodStart(now, resetDay = 1) {
+  const date = new Date(now);
+  let year = date.getFullYear();
+  let month = date.getMonth();
+  if (date.getDate() < resetDay) {
+    month -= 1;
+    if (month < 0) {
+      month = 11;
+      year -= 1;
+    }
+  }
+  return `${year}-${String(month + 1).padStart(2, "0")}-${String(resetDay).padStart(2, "0")}`;
+}
+
 export class SqliteRepository {
   constructor(dataDir) {
     fs.mkdirSync(dataDir, { recursive: true });
@@ -167,6 +193,19 @@ export class SqliteRepository {
 
       CREATE INDEX IF NOT EXISTS alerts_created_idx
         ON alerts (created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS traffic_counters (
+        server_id TEXT PRIMARY KEY,
+        last_rx INTEGER NOT NULL,
+        last_tx INTEGER NOT NULL,
+        last_uptime INTEGER NOT NULL,
+        total_rx INTEGER NOT NULL DEFAULT 0,
+        total_tx INTEGER NOT NULL DEFAULT 0,
+        period_start TEXT NOT NULL,
+        period_rx INTEGER NOT NULL DEFAULT 0,
+        period_tx INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      );
     `);
   }
 
@@ -252,6 +291,37 @@ export class SqliteRepository {
         @value, @threshold, @created_at
       )
     `);
+
+    this.getTrafficStatement = this.db.prepare(
+      "SELECT * FROM traffic_counters WHERE server_id = ?",
+    );
+
+    this.saveTrafficStatement = this.db.prepare(`
+      INSERT INTO traffic_counters (
+        server_id, last_rx, last_tx, last_uptime, total_rx, total_tx,
+        period_start, period_rx, period_tx, updated_at
+      ) VALUES (
+        @server_id, @last_rx, @last_tx, @last_uptime, @total_rx, @total_tx,
+        @period_start, @period_rx, @period_tx, @updated_at
+      )
+      ON CONFLICT(server_id) DO UPDATE SET
+        last_rx = excluded.last_rx,
+        last_tx = excluded.last_tx,
+        last_uptime = excluded.last_uptime,
+        total_rx = excluded.total_rx,
+        total_tx = excluded.total_tx,
+        period_start = excluded.period_start,
+        period_rx = excluded.period_rx,
+        period_tx = excluded.period_tx,
+        updated_at = excluded.updated_at
+    `);
+
+    this.pruneMetricsStatement = this.db.prepare(
+      "DELETE FROM metrics_1m WHERE bucket_ts < ?",
+    );
+    this.pruneAlertsStatement = this.db.prepare(
+      "DELETE FROM alerts WHERE created_at < ?",
+    );
   }
 
   upsertServer(metadata, now = Date.now()) {
@@ -354,6 +424,57 @@ export class SqliteRepository {
     return this.db
       .prepare("SELECT * FROM alerts ORDER BY created_at DESC LIMIT ?")
       .all(limit);
+  }
+
+  // Agents report interface counters since boot; accumulate the deltas so the
+  // monthly and all-time totals survive reboots and control-server restarts.
+  recordTraffic(serverId, metrics, periodStart, now = Date.now()) {
+    const rx = metrics.network.total_rx_bytes;
+    const tx = metrics.network.total_tx_bytes;
+    const uptime = metrics.uptime_seconds;
+    const row = this.getTrafficStatement.get(serverId);
+
+    let deltaRx = 0;
+    let deltaTx = 0;
+    if (row) {
+      if (uptime < row.last_uptime) {
+        // Rebooted: the counters restarted from zero.
+        deltaRx = rx;
+        deltaTx = tx;
+      } else if (rx >= row.last_rx && tx >= row.last_tx) {
+        deltaRx = rx - row.last_rx;
+        deltaTx = tx - row.last_tx;
+      }
+      // Otherwise the counters went backwards without a reboot (e.g. the
+      // agent changed which interfaces it counts): only move the baseline.
+    }
+
+    const samePeriod = row?.period_start === periodStart;
+    const next = {
+      server_id: serverId,
+      last_rx: rx,
+      last_tx: tx,
+      last_uptime: uptime,
+      total_rx: (row?.total_rx ?? 0) + deltaRx,
+      total_tx: (row?.total_tx ?? 0) + deltaTx,
+      period_start: periodStart,
+      period_rx: (samePeriod ? row.period_rx : 0) + deltaRx,
+      period_tx: (samePeriod ? row.period_tx : 0) + deltaTx,
+      updated_at: now,
+    };
+    this.saveTrafficStatement.run(next);
+    return trafficView(next, periodStart);
+  }
+
+  getTraffic(serverId, periodStart) {
+    return trafficView(this.getTrafficStatement.get(serverId), periodStart);
+  }
+
+  prune({ metricsBefore, alertsBefore }) {
+    return {
+      metrics: Number(this.pruneMetricsStatement.run(metricsBefore).changes),
+      alerts: Number(this.pruneAlertsStatement.run(alertsBefore).changes),
+    };
   }
 
   close() {

@@ -73,6 +73,20 @@ export function loadConfig(overrides = {}) {
     alertCooldownMs:
       overrides.alertCooldownMs ??
       positiveInteger(process.env.ALERT_COOLDOWN_MS, 600_000),
+    metricsRetentionDays:
+      overrides.metricsRetentionDays ??
+      positiveInteger(process.env.METRICS_RETENTION_DAYS, 30),
+    alertRetentionDays:
+      overrides.alertRetentionDays ??
+      positiveInteger(process.env.ALERT_RETENTION_DAYS, 90),
+    trafficResetDay: Math.min(
+      overrides.trafficResetDay ??
+        positiveInteger(process.env.TRAFFIC_RESET_DAY, 1),
+      28,
+    ),
+    pruneIntervalMs:
+      overrides.pruneIntervalMs ??
+      positiveInteger(process.env.PRUNE_INTERVAL_MS, 3_600_000),
     webhookUrl: overrides.webhookUrl ?? process.env.WEBHOOK_URL ?? "",
     webhookSecret:
       overrides.webhookSecret ?? process.env.WEBHOOK_SECRET ?? "",
