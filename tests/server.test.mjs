@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import WebSocket from "ws";
 import { buildServer } from "../server/index.mjs";
+import { SqliteRepository } from "../server/storage.mjs";
 
 const SERVER_ID = "test-node-01";
 const TOKEN = "test-node-token-with-enough-entropy";
@@ -177,6 +178,44 @@ test("agent authentication, metrics, alerts, history and offline TTL work end-to
     assert.ok(offlineAlerts.alerts.some((alert) => alert.type === "OFFLINE"));
   } finally {
     await app.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("prune removes history and alerts older than the retention cutoff", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "probe-atlas-test-"));
+  const repository = new SqliteRepository(dataDir);
+  const now = Date.now();
+  const day = 86_400_000;
+
+  try {
+    const { data } = metricsPacket(1);
+    repository.addSample(SERVER_ID, data, now - 40 * day);
+    repository.addSample(SERVER_ID, data, now);
+    for (const [id, createdAt] of [["old", now - 100 * day], ["new", now]]) {
+      repository.insertAlert({
+        id,
+        server_id: SERVER_ID,
+        type: "CPU",
+        severity: "critical",
+        title: "test",
+        message: "test",
+        created_at: createdAt,
+      });
+    }
+
+    const removed = repository.prune({
+      metricsBefore: now - 30 * day,
+      alertsBefore: now - 90 * day,
+    });
+    assert.deepEqual(removed, { metrics: 1, alerts: 1 });
+    assert.equal(repository.getHistory(SERVER_ID, 60 * 24 * 60).length, 1);
+    assert.deepEqual(
+      repository.getAlerts().map((alert) => alert.id),
+      ["new"],
+    );
+  } finally {
+    repository.close();
     await rm(dataDir, { recursive: true, force: true });
   }
 });

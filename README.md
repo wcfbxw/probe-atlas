@@ -54,6 +54,10 @@ curl -fsSL https://raw.githubusercontent.com/wcfbxw/probe-atlas/main/deploy/inst
     --provider 'ExampleCloud'
 ```
 
+Agent 需要 Python 3.9 或更高版本。Rocky Linux / AlmaLinux 8 自带的 Python 3.6
+过旧，安装脚本会自动安装 `python3.11`；CentOS 7 等更旧的系统需先自行安装
+Python 3.9+。
+
 Agent 会作为 `probe-agent.service` 开机自启，每 2 秒上报一次。查看状态：
 
 ```bash
@@ -114,7 +118,8 @@ npm run dev:sim
 
 - Fastify + WebSocket 控制服务；
 - Redis 实时状态与 TTL 离线判定；
-- SQLite 分钟级聚合历史（附 TimescaleDB 表结构）；
+- SQLite 分钟级聚合历史（附 TimescaleDB 表结构），默认保留 30 天、告警保留
+  90 天（`METRICS_RETENTION_DAYS` / `ALERT_RETENTION_DAYS`）；
 - CPU/内存连续三次超限告警与 10 分钟冷却；
 - Python `psutil` Agent，systemd 沙箱化运行；
 - React + ECharts 多节点实时 Dashboard；

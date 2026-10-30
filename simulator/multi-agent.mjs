@@ -141,18 +141,21 @@ function buildMetrics(profile, state) {
   };
 }
 
-function runAgent(profile) {
-  return new Promise((resolve, reject) => {
+const RETRY_DELAY_MS = 2_000;
+const deadline =
+  durationSeconds > 0 ? Date.now() + durationSeconds * 1_000 : Infinity;
+
+function runSession(profile, state) {
+  return new Promise((resolve) => {
     const socket = new WebSocket(wsUrl, {
       perMessageDeflate: false,
       handshakeTimeout: 5_000,
     });
-    const state = {
-      sequence: 0,
-      totalRx: 12_000_000_000 + Math.round(profile.phase * 1_000_000_000),
-      totalTx: 8_000_000_000 + Math.round(profile.phase * 800_000_000),
-      timer: null,
-      offlineTimer: null,
+    let stopReason = null;
+    let lastError = null;
+    const stop = (reason) => {
+      stopReason = reason;
+      socket.close(1000, reason);
     };
 
     socket.on("open", () => {
@@ -193,7 +196,7 @@ function runAgent(profile) {
         ) {
           state.offlineTimer = setTimeout(() => {
             console.log(`[sim] ${profile.serverId} going offline`);
-            socket.close(1000, "simulated_offline");
+            stop("simulated_offline");
           }, offlineAfterSeconds * 1_000);
         }
       } else if (message.type === "error") {
@@ -201,17 +204,47 @@ function runAgent(profile) {
       }
     });
 
+    const durationTimer =
+      deadline === Infinity
+        ? null
+        : setTimeout(
+            () => stop("simulation_complete"),
+            Math.max(deadline - Date.now(), 0),
+          );
+
     socket.on("close", () => {
       clearInterval(state.timer);
       clearTimeout(state.offlineTimer);
-      resolve();
+      clearTimeout(durationTimer);
+      resolve({ stopReason, error: lastError });
     });
-    socket.on("error", reject);
-
-    if (durationSeconds > 0) {
-      setTimeout(() => socket.close(1000, "simulation_complete"), durationSeconds * 1_000);
-    }
+    socket.on("error", (error) => {
+      lastError = error;
+    });
   });
+}
+
+// Reconnects like the real agent, so the simulator survives starting before
+// the control server and control server restarts.
+async function runAgent(profile) {
+  const state = {
+    sequence: 0,
+    totalRx: 12_000_000_000 + Math.round(profile.phase * 1_000_000_000),
+    totalTx: 8_000_000_000 + Math.round(profile.phase * 800_000_000),
+    timer: null,
+    offlineTimer: null,
+  };
+
+  while (Date.now() < deadline) {
+    const { stopReason, error } = await runSession(profile, state);
+    if (stopReason) {
+      return;
+    }
+    console.log(
+      `[sim] ${profile.serverId} disconnected${error ? ` (${error.message})` : ""}; retrying in ${RETRY_DELAY_MS / 1_000}s`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+  }
 }
 
 console.log(`[sim] connecting ${PROFILES.length} agents to ${wsUrl}`);

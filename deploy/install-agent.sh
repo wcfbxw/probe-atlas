@@ -93,11 +93,30 @@ install_prerequisites() {
       python3 python3-venv python3-pip curl ca-certificates
   elif command -v dnf >/dev/null 2>&1; then
     dnf install -y python3 python3-pip curl ca-certificates
+    # EL8 ships Python 3.6 as python3; the agent dependencies need 3.9+.
+    if ! find_python >/dev/null; then
+      dnf install -y python3.11 python3.11-pip ||
+        dnf install -y python39 python39-pip ||
+        true
+    fi
   elif command -v yum >/dev/null 2>&1; then
     yum install -y python3 python3-pip curl ca-certificates
   else
     die "仅支持带 apt、dnf 或 yum 的 systemd Linux 发行版"
   fi
+}
+
+find_python() {
+  local candidate
+  for candidate in python3 python3.13 python3.12 python3.11 python3.10 python3.9; do
+    if command -v "$candidate" >/dev/null 2>&1 &&
+      "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' \
+        >/dev/null 2>&1; then
+      command -v "$candidate"
+      return 0
+    fi
+  done
+  return 1
 }
 
 quote_systemd_value() {
@@ -108,6 +127,8 @@ quote_systemd_value() {
 }
 
 install_prerequisites
+PYTHON_BIN="$(find_python)" ||
+  die "未找到 Python 3.9 或更高版本；CentOS 7 等旧系统请先自行安装 Python 3.9+ 后重试"
 
 if ! id probe-agent >/dev/null 2>&1; then
   useradd --system --home-dir /opt/probe-agent --shell /usr/sbin/nologin probe-agent
@@ -121,7 +142,7 @@ curl -fsSL "$RAW_BASE_URL/agent/requirements.txt" -o /opt/probe-agent/requiremen
 curl -fsSL "$RAW_BASE_URL/agent/probe-agent.service" \
   -o /etc/systemd/system/probe-agent.service
 
-python3 -m venv /opt/probe-agent/venv
+"$PYTHON_BIN" -m venv /opt/probe-agent/venv
 /opt/probe-agent/venv/bin/pip install --disable-pip-version-check \
   -r /opt/probe-agent/requirements.txt
 

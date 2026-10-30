@@ -419,6 +419,25 @@ export async function buildServer(overrides = {}) {
   }, config.offlineSweepMs);
   timers.add(offlineTimer);
 
+  function pruneHistory() {
+    const now = Date.now();
+    try {
+      const removed = repository.prune({
+        metricsBefore: now - config.metricsRetentionDays * 86_400_000,
+        alertsBefore: now - config.alertRetentionDays * 86_400_000,
+      });
+      if (removed.metrics > 0 || removed.alerts > 0) {
+        app.log.info(removed, "Pruned expired history");
+      }
+    } catch (error) {
+      app.log.error(error, "History pruning failed");
+    }
+  }
+
+  pruneHistory();
+  const pruneTimer = setInterval(pruneHistory, config.pruneIntervalMs);
+  timers.add(pruneTimer);
+
   const existingServers = repository.getServers();
   const existingStatuses = await statusStore.getStatuses(
     existingServers.map((server) => server.server_id),

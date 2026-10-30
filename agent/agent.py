@@ -10,6 +10,7 @@ import platform
 import random
 import socket
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import psutil
@@ -162,6 +163,19 @@ class MetricsCollector:
         return payload
 
 
+def cpu_model() -> str:
+    # platform.processor() only returns "x86_64"/"unknown" on most Linux distros.
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as cpuinfo:
+            for line in cpuinfo:
+                key, _, value = line.partition(":")
+                if key.strip() in ("model name", "Model", "Hardware") and value.strip():
+                    return value.strip()
+    except OSError:
+        pass
+    return platform.processor() or platform.machine() or "Unknown CPU"
+
+
 def auth_packet(config: AgentConfig) -> dict:
     memory = psutil.virtual_memory()
     disk = psutil.disk_usage("/")
@@ -176,7 +190,7 @@ def auth_packet(config: AgentConfig) -> dict:
         "tags": [],
         "os": f"{platform.system()} {platform.release()}",
         "arch": platform.machine(),
-        "cpu_model": platform.processor() or "Unknown CPU",
+        "cpu_model": cpu_model(),
         "cpu_cores": psutil.cpu_count(logical=True) or 1,
         "mem_total_mb": memory.total // MIB,
         "disk_total_mb": disk.total // MIB,
@@ -202,7 +216,10 @@ async def receive_messages(websocket: websockets.ClientConnection) -> None:
             raise RuntimeError(f"Server rejected packet: {message.get('code')}")
 
 
-async def run_session(config: AgentConfig) -> None:
+async def run_session(
+    config: AgentConfig,
+    on_authenticated: Callable[[], None],
+) -> None:
     async with websockets.connect(
         config.server_url,
         open_timeout=10,
@@ -218,6 +235,7 @@ async def run_session(config: AgentConfig) -> None:
             raise RuntimeError(f"Authentication failed: {response}")
 
         print(f"Authenticated as {config.server_id}", flush=True)
+        on_authenticated()
         sender = asyncio.create_task(send_metrics(websocket, config))
         receiver = asyncio.create_task(receive_messages(websocket))
         done, pending = await asyncio.wait(
@@ -231,11 +249,16 @@ async def run_session(config: AgentConfig) -> None:
 
 async def run_forever(config: AgentConfig) -> None:
     backoff = 1.0
+
+    # run_session always ends by raising, so reset once a session authenticates.
+    def reset_backoff() -> None:
+        nonlocal backoff
+        backoff = 1.0
+
     while True:
         try:
             print(f"Connecting to {config.server_url}", flush=True)
-            await run_session(config)
-            backoff = 1.0
+            await run_session(config, reset_backoff)
         except asyncio.CancelledError:
             raise
         except Exception as error:  # noqa: BLE001 - reconnect boundary

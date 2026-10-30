@@ -20,6 +20,7 @@ import {
   NetworkChart,
   type NetworkPoint,
 } from "./components/NetworkChart";
+import { formatRate } from "./format";
 
 type Metrics = {
   cpu: {
@@ -99,13 +100,6 @@ const API_BASE =
     ? "http://127.0.0.1:8080"
     : `${window.location.protocol}//${window.location.hostname}:8080`);
 const WS_BASE = API_BASE.replace(/^http/, "ws");
-
-function formatRate(value = 0) {
-  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)} GB/s`;
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)} MB/s`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(0)} KB/s`;
-  return `${Math.round(value)} B/s`;
-}
 
 function formatSize(megabytes = 0) {
   if (megabytes >= 1024) return `${(megabytes / 1024).toFixed(1)} GB`;

@@ -252,6 +252,13 @@ export class SqliteRepository {
         @value, @threshold, @created_at
       )
     `);
+
+    this.pruneMetricsStatement = this.db.prepare(
+      "DELETE FROM metrics_1m WHERE bucket_ts < ?",
+    );
+    this.pruneAlertsStatement = this.db.prepare(
+      "DELETE FROM alerts WHERE created_at < ?",
+    );
   }
 
   upsertServer(metadata, now = Date.now()) {
@@ -354,6 +361,13 @@ export class SqliteRepository {
     return this.db
       .prepare("SELECT * FROM alerts ORDER BY created_at DESC LIMIT ?")
       .all(limit);
+  }
+
+  prune({ metricsBefore, alertsBefore }) {
+    return {
+      metrics: Number(this.pruneMetricsStatement.run(metricsBefore).changes),
+      alerts: Number(this.pruneAlertsStatement.run(alertsBefore).changes),
+    };
   }
 
   close() {
