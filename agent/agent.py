@@ -19,6 +19,38 @@ import websockets
 
 MIB = 1024 * 1024
 
+# Loopback, container, bridge and tunnel interfaces either never leave the
+# host or repeat traffic already counted on the physical NIC.
+VIRTUAL_INTERFACE_PREFIXES = (
+    "lo",
+    "docker",
+    "veth",
+    "br-",
+    "virbr",
+    "vnet",
+    "tun",
+    "tap",
+    "wg",
+    "tailscale",
+    "zt",
+    "cni",
+    "flannel",
+    "cali",
+    "kube",
+    "vxlan",
+    "ifb",
+)
+
+
+def net_counters() -> tuple[int, int]:
+    rx = tx = 0
+    for name, counters in psutil.net_io_counters(pernic=True).items():
+        if name.lower().startswith(VIRTUAL_INTERFACE_PREFIXES):
+            continue
+        rx += counters.bytes_recv
+        tx += counters.bytes_sent
+    return rx, tx
+
 
 @dataclass
 class AgentConfig:
@@ -56,11 +88,11 @@ class AgentConfig:
 
 class MetricsCollector:
     def __init__(self) -> None:
-        net = psutil.net_io_counters()
+        rx, tx = net_counters()
         disk_io = psutil.disk_io_counters()
         self.previous_time = time.monotonic()
-        self.previous_rx = net.bytes_recv
-        self.previous_tx = net.bytes_sent
+        self.previous_rx = rx
+        self.previous_tx = tx
         self.previous_disk_read = disk_io.read_bytes if disk_io else 0
         self.previous_disk_write = disk_io.write_bytes if disk_io else 0
         self.last_tcp_scan = 0.0
@@ -101,7 +133,7 @@ class MetricsCollector:
         memory = psutil.virtual_memory()
         swap = psutil.swap_memory()
         disk = psutil.disk_usage("/")
-        net = psutil.net_io_counters()
+        net_rx, net_tx = net_counters()
         disk_io = psutil.disk_io_counters()
         loads = psutil.getloadavg() if hasattr(psutil, "getloadavg") else (0, 0, 0)
 
@@ -141,14 +173,10 @@ class MetricsCollector:
                     ),
                 },
                 "network": {
-                    "rx_bytes_sec": self._rate(
-                        net.bytes_recv, self.previous_rx, elapsed
-                    ),
-                    "tx_bytes_sec": self._rate(
-                        net.bytes_sent, self.previous_tx, elapsed
-                    ),
-                    "total_rx_bytes": net.bytes_recv,
-                    "total_tx_bytes": net.bytes_sent,
+                    "rx_bytes_sec": self._rate(net_rx, self.previous_rx, elapsed),
+                    "tx_bytes_sec": self._rate(net_tx, self.previous_tx, elapsed),
+                    "total_rx_bytes": net_rx,
+                    "total_tx_bytes": net_tx,
                     "tcp_connections": self._scan_tcp(monotonic_time),
                 },
                 "uptime_seconds": max(0, int(wall_time - psutil.boot_time())),
@@ -156,8 +184,8 @@ class MetricsCollector:
         }
 
         self.previous_time = monotonic_time
-        self.previous_rx = net.bytes_recv
-        self.previous_tx = net.bytes_sent
+        self.previous_rx = net_rx
+        self.previous_tx = net_tx
         self.previous_disk_read = disk_read
         self.previous_disk_write = disk_write
         return payload

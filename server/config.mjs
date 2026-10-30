@@ -79,6 +79,11 @@ export function loadConfig(overrides = {}) {
     alertRetentionDays:
       overrides.alertRetentionDays ??
       positiveInteger(process.env.ALERT_RETENTION_DAYS, 90),
+    trafficResetDay: Math.min(
+      overrides.trafficResetDay ??
+        positiveInteger(process.env.TRAFFIC_RESET_DAY, 1),
+      28,
+    ),
     pruneIntervalMs:
       overrides.pruneIntervalMs ??
       positiveInteger(process.env.PRUNE_INTERVAL_MS, 3_600_000),

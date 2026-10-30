@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import WebSocket from "ws";
 import { buildServer } from "../server/index.mjs";
-import { SqliteRepository } from "../server/storage.mjs";
+import { SqliteRepository, trafficPeriodStart } from "../server/storage.mjs";
 
 const SERVER_ID = "test-node-01";
 const TOKEN = "test-node-token-with-enough-entropy";
@@ -144,6 +144,8 @@ test("agent authentication, metrics, alerts, history and offline TTL work end-to
       serversPayload.servers[0].status.data.network.rx_bytes_sec,
       3000,
     );
+    assert.equal(serversPayload.servers[0].traffic.month_rx_bytes, 0);
+    assert.equal(serversPayload.servers[0].traffic.total_tx_bytes, 0);
 
     for (let sequence = 2; sequence <= 4; sequence += 1) {
       await delay(170);
@@ -178,6 +180,63 @@ test("agent authentication, metrics, alerts, history and offline TTL work end-to
     assert.ok(offlineAlerts.alerts.some((alert) => alert.type === "OFFLINE"));
   } finally {
     await app.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("trafficPeriodStart honours the reset day", () => {
+  assert.equal(trafficPeriodStart(new Date(2026, 9, 30).getTime(), 1), "2026-10-01");
+  assert.equal(trafficPeriodStart(new Date(2026, 9, 14).getTime(), 15), "2026-09-15");
+  assert.equal(trafficPeriodStart(new Date(2026, 0, 3).getTime(), 10), "2025-12-10");
+});
+
+test("recordTraffic accumulates monthly and all-time traffic across reboots", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "probe-atlas-test-"));
+  const repository = new SqliteRepository(dataDir);
+  const sample = (rx, tx, uptime) => {
+    const { data } = metricsPacket(1);
+    return {
+      ...data,
+      network: { ...data.network, total_rx_bytes: rx, total_tx_bytes: tx },
+      uptime_seconds: uptime,
+    };
+  };
+
+  try {
+    // The first sample only sets the baseline.
+    let traffic = repository.recordTraffic(SERVER_ID, sample(1_000, 500, 100), "2026-10-01");
+    assert.equal(traffic.month_rx_bytes, 0);
+
+    traffic = repository.recordTraffic(SERVER_ID, sample(4_000, 1_500, 102), "2026-10-01");
+    assert.deepEqual(traffic, {
+      period_start: "2026-10-01",
+      month_rx_bytes: 3_000,
+      month_tx_bytes: 1_000,
+      total_rx_bytes: 3_000,
+      total_tx_bytes: 1_000,
+    });
+
+    // Reboot: uptime dropped, counters restarted from zero.
+    traffic = repository.recordTraffic(SERVER_ID, sample(200, 100, 5), "2026-10-01");
+    assert.equal(traffic.month_rx_bytes, 3_200);
+    assert.equal(traffic.total_tx_bytes, 1_100);
+
+    // Counters went backwards without a reboot: baseline moves, no traffic added.
+    traffic = repository.recordTraffic(SERVER_ID, sample(50, 20, 7), "2026-10-01");
+    assert.equal(traffic.month_rx_bytes, 3_200);
+
+    // New billing month: monthly totals restart, all-time totals keep growing.
+    traffic = repository.recordTraffic(SERVER_ID, sample(1_050, 520, 9), "2026-11-01");
+    assert.equal(traffic.month_rx_bytes, 1_000);
+    assert.equal(traffic.month_tx_bytes, 500);
+    assert.equal(traffic.total_rx_bytes, 4_200);
+    assert.equal(traffic.total_tx_bytes, 1_600);
+
+    // Reading for a later month before any sample arrives shows zero usage.
+    assert.equal(repository.getTraffic(SERVER_ID, "2026-12-01").month_rx_bytes, 0);
+    assert.equal(repository.getTraffic(SERVER_ID, "2026-12-01").total_rx_bytes, 4_200);
+  } finally {
+    repository.close();
     await rm(dataDir, { recursive: true, force: true });
   }
 });

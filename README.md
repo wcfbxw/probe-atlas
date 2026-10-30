@@ -120,6 +120,8 @@ npm run dev:sim
 - Redis 实时状态与 TTL 离线判定；
 - SQLite 分钟级聚合历史（附 TimescaleDB 表结构），默认保留 30 天、告警保留
   90 天（`METRICS_RETENTION_DAYS` / `ALERT_RETENTION_DAYS`）；
+- 每个节点的本月流量与累计流量（只统计物理网卡，排除 lo、Docker、VPN 等虚拟
+  网卡；按 `TRAFFIC_RESET_DAY` 每月重置，默认每月 1 日，时区由 `TZ` 决定）；
 - CPU/内存连续三次超限告警与 10 分钟冷却；
 - Python `psutil` Agent，systemd 沙箱化运行；
 - React + ECharts 多节点实时 Dashboard；

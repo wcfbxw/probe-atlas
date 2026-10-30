@@ -20,7 +20,7 @@ import {
   NetworkChart,
   type NetworkPoint,
 } from "./components/NetworkChart";
-import { formatRate } from "./format";
+import { formatBytes, formatRate } from "./format";
 
 type Metrics = {
   cpu: {
@@ -55,11 +55,20 @@ type Metrics = {
   uptime_seconds: number;
 };
 
+type Traffic = {
+  period_start: string;
+  month_rx_bytes: number;
+  month_tx_bytes: number;
+  total_rx_bytes: number;
+  total_tx_bytes: number;
+};
+
 type Status = {
   server_id: string;
   received_at: number;
   sequence: number | null;
   data: Metrics;
+  traffic?: Traffic;
 };
 
 type ServerView = {
@@ -79,6 +88,7 @@ type ServerView = {
   connected: boolean;
   online: boolean;
   status: Status | null;
+  traffic?: Traffic;
 };
 
 type AlertRecord = {
@@ -170,6 +180,39 @@ function ProgressMetric({
   );
 }
 
+function TrafficSummary({ traffic }: { traffic?: Traffic }) {
+  if (!traffic) return null;
+  const rows = [
+    {
+      label: "本月流量",
+      title: `自 ${traffic.period_start} 起`,
+      rx: traffic.month_rx_bytes,
+      tx: traffic.month_tx_bytes,
+    },
+    {
+      label: "累计流量",
+      title: "自节点接入监控起",
+      rx: traffic.total_rx_bytes,
+      tx: traffic.total_tx_bytes,
+    },
+  ];
+
+  return (
+    <div className="card-traffic">
+      {rows.map((row) => (
+        <div key={row.label} title={row.title}>
+          <span>{row.label}</span>
+          <strong>{formatBytes(row.rx + row.tx)}</strong>
+          <small>
+            <ArrowDown size={10} /> {formatBytes(row.rx)}
+            <ArrowUp size={10} /> {formatBytes(row.tx)}
+          </small>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ServerCard({
   server,
   selected,
@@ -233,6 +276,7 @@ function ServerCard({
               />
             </div>
           </div>
+          <TrafficSummary traffic={server.traffic} />
           <div className="card-network">
             <span>
               <ArrowDown size={14} /> {formatRate(metrics.network.rx_bytes_sec)}
@@ -244,13 +288,16 @@ function ServerCard({
           </div>
         </>
       ) : (
-        <div className="offline-state">
-          <WifiOff size={22} />
-          <div>
-            <strong>节点离线</strong>
-            <span>最后上报 {relativeTime(server.last_seen_at)}</span>
+        <>
+          <div className="offline-state">
+            <WifiOff size={22} />
+            <div>
+              <strong>节点离线</strong>
+              <span>最后上报 {relativeTime(server.last_seen_at)}</span>
+            </div>
           </div>
-        </div>
+          <TrafficSummary traffic={server.traffic} />
+        </>
       )}
     </button>
   );
@@ -326,6 +373,7 @@ export function Dashboard() {
                     connected: true,
                     last_seen_at: status.received_at,
                     status,
+                    traffic: status.traffic ?? server.traffic,
                   }
                 : server;
             }),
