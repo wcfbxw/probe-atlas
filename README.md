@@ -120,8 +120,10 @@ npm run dev:sim
 - Redis 实时状态与 TTL 离线判定；
 - SQLite 分钟级聚合历史（附 TimescaleDB 表结构），默认保留 30 天、告警保留
   90 天（`METRICS_RETENTION_DAYS` / `ALERT_RETENTION_DAYS`）；
-- 每个节点的本月流量与累计流量（只统计物理网卡，排除 lo、Docker、VPN 等虚拟
-  网卡；按 `TRAFFIC_RESET_DAY` 每月重置，默认每月 1 日，时区由 `TZ` 决定）；
+- 每个节点的本月流量与累计流量（只统计物理网卡，排除 lo、Docker、VPN/代理 TUN
+  等虚拟网卡；按 `TRAFFIC_RESET_DAY` 每月重置，默认每月 1 日，时区由 `TZ` 决定）。
+  bond、Proxmox 网桥等特殊网络可在节点的 `/etc/probe-agent/agent.env` 中设置
+  `PROBE_INTERFACES="eth0"` 手动指定统计的网卡，然后 `systemctl restart probe-agent`；
 - CPU/内存连续三次超限告警与 10 分钟冷却；
 - Python `psutil` Agent，systemd 沙箱化运行；
 - React + ECharts 多节点实时 Dashboard；

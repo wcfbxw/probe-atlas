@@ -19,8 +19,8 @@ import websockets
 
 MIB = 1024 * 1024
 
-# Loopback, container, bridge and tunnel interfaces either never leave the
-# host or repeat traffic already counted on the physical NIC.
+# Loopback, container, bridge, VM and tunnel/VPN interfaces either never leave
+# the host or repeat traffic already counted on the physical NIC.
 VIRTUAL_INTERFACE_PREFIXES = (
     "lo",
     "docker",
@@ -28,10 +28,7 @@ VIRTUAL_INTERFACE_PREFIXES = (
     "br-",
     "virbr",
     "vnet",
-    "tun",
-    "tap",
     "wg",
-    "tailscale",
     "zt",
     "cni",
     "flannel",
@@ -40,15 +37,41 @@ VIRTUAL_INTERFACE_PREFIXES = (
     "vxlan",
     "ifb",
 )
+VIRTUAL_INTERFACE_KEYWORDS = (
+    "tun",
+    "tap",
+    "wireguard",
+    "tailscale",
+    "zerotier",
+    "loopback",
+    "vmware",
+    "virtualbox",
+    "vethernet",
+    "hyper-v",
+)
 
 
-def net_counters() -> tuple[int, int]:
+def is_counted_interface(name: str, stats) -> bool:
+    lower = name.lower()
+    if lower.startswith(VIRTUAL_INTERFACE_PREFIXES):
+        return False
+    if any(keyword in lower for keyword in VIRTUAL_INTERFACE_KEYWORDS):
+        return False
+    return "loopback" not in getattr(stats, "flags", "")
+
+
+def net_counters(interfaces: frozenset[str] = frozenset()) -> tuple[int, int]:
+    stats = psutil.net_if_stats()
     rx = tx = 0
     for name, counters in psutil.net_io_counters(pernic=True).items():
-        if name.lower().startswith(VIRTUAL_INTERFACE_PREFIXES):
-            continue
-        rx += counters.bytes_recv
-        tx += counters.bytes_sent
+        counted = (
+            name in interfaces
+            if interfaces
+            else is_counted_interface(name, stats.get(name))
+        )
+        if counted:
+            rx += counters.bytes_recv
+            tx += counters.bytes_sent
     return rx, tx
 
 
@@ -61,6 +84,7 @@ class AgentConfig:
     region: str
     provider: str
     interval_seconds: float = 2.0
+    interfaces: frozenset[str] = frozenset()
 
     @classmethod
     def from_environment(cls) -> "AgentConfig":
@@ -83,12 +107,19 @@ class AgentConfig:
             interval_seconds=max(
                 1.0, float(os.environ.get("PROBE_INTERVAL_SECONDS", "2"))
             ),
+            # Comma-separated NICs to count instead of auto-detection.
+            interfaces=frozenset(
+                name.strip()
+                for name in os.environ.get("PROBE_INTERFACES", "").split(",")
+                if name.strip()
+            ),
         )
 
 
 class MetricsCollector:
-    def __init__(self) -> None:
-        rx, tx = net_counters()
+    def __init__(self, interfaces: frozenset[str] = frozenset()) -> None:
+        self.interfaces = interfaces
+        rx, tx = net_counters(interfaces)
         disk_io = psutil.disk_io_counters()
         self.previous_time = time.monotonic()
         self.previous_rx = rx
@@ -133,7 +164,7 @@ class MetricsCollector:
         memory = psutil.virtual_memory()
         swap = psutil.swap_memory()
         disk = psutil.disk_usage("/")
-        net_rx, net_tx = net_counters()
+        net_rx, net_tx = net_counters(self.interfaces)
         disk_io = psutil.disk_io_counters()
         loads = psutil.getloadavg() if hasattr(psutil, "getloadavg") else (0, 0, 0)
 
@@ -229,7 +260,7 @@ async def send_metrics(
     websocket: websockets.ClientConnection,
     config: AgentConfig,
 ) -> None:
-    collector = MetricsCollector()
+    collector = MetricsCollector(config.interfaces)
     sequence = 0
     while True:
         await asyncio.sleep(config.interval_seconds)
